@@ -1,5 +1,4 @@
 /*
- * Copyright (c) 2024, Smoke (Smoked today) <https://github.com/Varietyz>
  * Copyright (c) 2016-2017, Adam <Adam@sigterm.info>
  * All rights reserved.
  *
@@ -66,15 +65,11 @@ import java.awt.event.WindowFocusListener;
 import java.awt.image.BufferedImage;
 import java.time.Duration;
 import java.util.ArrayDeque;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Deque;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.TreeSet;
 import java.util.function.Function;
-import java.util.stream.Collectors;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import javax.inject.Named;
@@ -99,7 +94,6 @@ import javax.swing.JTabbedPane;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 import javax.swing.ToolTipManager;
-import javax.swing.TransferHandler;
 import javax.swing.border.EmptyBorder;
 import javax.swing.border.MatteBorder;
 import javax.swing.event.HyperlinkEvent;
@@ -165,8 +159,7 @@ public class ClientUI
 	private BufferedImage sidebarCloseIcon;
 
 	private JTabbedPane sidebar;
-	private final List<NavigationButton> sidebarEntries = new ArrayList<>();
-	private SidebarOrderManager sidebarOrderManager;
+	private final TreeSet<NavigationButton> sidebarEntries = new TreeSet<>(NavigationButton.COMPARATOR);
 	private final Deque<HistoryEntry> selectedTabHistory = new ArrayDeque<>();
 	private NavigationButton selectedTab;
 
@@ -214,7 +207,6 @@ public class ClientUI
 		@Named("runelite.title") String title
 	)
 	{
-		this.sidebarOrderManager = new SidebarOrderManager();
 		this.config = config;
 		this.mouseManager = mouseManager;
 		this.client = client;
@@ -226,7 +218,6 @@ public class ClientUI
 
 		normalBoundsTimer = new Timer(250, _ev -> setLastNormalBounds());
 		normalBoundsTimer.setRepeats(false);
-
 	}
 
 	@Subscribe
@@ -242,44 +233,44 @@ public class ClientUI
 		SwingUtilities.invokeLater(() -> updateFrameConfig(event.getKey().equals("lockWindowSize")));
 	}
 
-	void addNavigation(NavigationButton navBtn) {
-		if (navBtn.getPanel() == null) {
+	void addNavigation(NavigationButton navBtn)
+	{
+		if (navBtn.getPanel() == null)
+		{
 			toolbarPanel.add(navBtn, true);
 			return;
 		}
 
-		if (!sidebarEntries.contains(navBtn)) {
-			sidebarEntries.add(navBtn);
+		if (!sidebarEntries.add(navBtn))
+		{
+			return;
 		}
-		loadOrder(sidebarEntries);
+
 		final int TAB_SIZE = 16;
 		Icon icon = new ImageIcon(ImageUtil.resizeImage(navBtn.getIcon(), TAB_SIZE, TAB_SIZE));
 
 		sidebar.insertTab(null, icon, navBtn.getPanel().getWrappedPanel(), navBtn.getTooltip(),
-			sidebarEntries.indexOf(navBtn));
-
-		if (sidebar.getTabCount() == 1) {
+			sidebarEntries.headSet(navBtn).size());
+		// insertTab changes the selected index when the first tab is inserted, avoid this
+		if (sidebar.getTabCount() == 1)
+		{
 			sidebar.setSelectedIndex(-1);
 		}
 	}
 
-	private void loadOrder(List<NavigationButton> sidebarEntries) {
-		List<NavigationButton> orderedEntries = sidebarOrderManager.loadOrder(sidebarEntries);
-		if (orderedEntries != null) {
-			sidebarEntries.clear();
-			sidebarEntries.addAll(orderedEntries);
-		}
-	}
-
-	void removeNavigation(NavigationButton navBtn) {
-		if (navBtn.getPanel() == null) {
+	void removeNavigation(NavigationButton navBtn)
+	{
+		if (navBtn.getPanel() == null)
+		{
 			toolbarPanel.remove(navBtn);
-		} else {
+		}
+		else
+		{
 			boolean closingOpenTab = !selectedTabHistory.isEmpty() && selectedTabHistory.getLast().navBtn == navBtn;
 			selectedTabHistory.removeIf(it -> it.navBtn == navBtn);
 			sidebar.remove(navBtn.getPanel().getWrappedPanel());
-
-			if (closingOpenTab) {
+			if (closingOpenTab)
+			{
 				HistoryEntry entry = selectedTabHistory.isEmpty()
 					? new HistoryEntry(true, null)
 					: selectedTabHistory.removeLast();
@@ -290,7 +281,6 @@ public class ClientUI
 
 		sidebarEntries.remove(navBtn);
 	}
-
 
 	@Subscribe
 	private void onGameStateChanged(final GameStateChanged event)
@@ -416,19 +406,6 @@ public class ClientUI
 			sidebar.setOpaque(true);
 			sidebar.putClientProperty(FlatClientProperties.STYLE, "tabInsets: 2,5,2,5; variableSize: true; deselectable: true; tabHeight: 26");
 			sidebar.setSelectedIndex(-1);
-			sidebar.setTransferHandler(new TabReorderHandler(sidebarEntries));
-			sidebar.addMouseMotionListener(new java.awt.event.MouseAdapter() {
-				@Override
-				public void mouseDragged(MouseEvent e) {
-					int index = sidebar.indexAtLocation(e.getX(), e.getY());
-					if (index != -1) {
-						sidebar.setSelectedIndex(index);
-						TransferHandler handler = sidebar.getTransferHandler();
-						handler.exportAsDrag(sidebar, e, TransferHandler.MOVE);
-					}
-				}
-			});
-
 			sidebar.addChangeListener(ev ->
 			{
 				NavigationButton oldSelectedTab = selectedTab;
@@ -503,6 +480,7 @@ public class ClientUI
 			});
 
 			content.add(sidebar);
+
 			frame.setContentPane(content);
 
 			// Add key listener
@@ -842,8 +820,6 @@ public class ClientUI
 	private void shutdownClient()
 	{
 		saveClientBoundsConfig();
-		SidebarOrderManager orderManager = new SidebarOrderManager();
-		orderManager.saveOrder(sidebarEntries); // Save the order of the sidebar entries
 		ClientShutdown csev = new ClientShutdown();
 		eventBus.post(csev);
 		new Thread(() ->
@@ -1104,19 +1080,20 @@ public class ClientUI
 		return frame.getGraphicsConfiguration();
 	}
 
-	void openPanel(NavigationButton navBtn, boolean showSidebar) {
-		if (navBtn != null && !sidebarEntries.contains(navBtn)) {
-			return; // Early exit if the navBtn is not in the list
+	void openPanel(NavigationButton navBtn, boolean showSidebar)
+	{
+		if (navBtn != null && !sidebarEntries.contains(navBtn))
+		{
+			return;
 		}
 
-		// Use indexOf to find the index of the NavigationButton
-		int index = (navBtn == null) ? -1 : sidebarEntries.indexOf(navBtn);
+		int index = navBtn == null ? -1 : sidebarEntries.headSet(navBtn).size();
 		sidebar.setSelectedIndex(index);
 
 		toggleSidebar(showSidebar, false);
+
 		pushHistory();
 	}
-
 
 	private void toggleSidebar()
 	{
@@ -1171,33 +1148,35 @@ public class ClientUI
 		}
 	}
 
-	private void togglePluginPanel() {
-		if (!sidebar.isVisible() || sidebar.getSelectedIndex() < 0) {
+	private void togglePluginPanel()
+	{
+		if (!sidebar.isVisible() || sidebar.getSelectedIndex() < 0)
+		{
 			toggleSidebar(true, false);
 
 			NavigationButton open = null;
-
-			// Traverse the history stack to find the last opened NavigationButton
-			while (!selectedTabHistory.isEmpty()) {
+			while (!selectedTabHistory.isEmpty())
+			{
 				HistoryEntry historyEntry = selectedTabHistory.removeLast();
-				if (historyEntry.navBtn != null) {
+				if (historyEntry.navBtn != null)
+				{
 					open = historyEntry.navBtn;
-					break; // Found the last opened button
+					break;
 				}
 			}
 
-			// If no last opened button found, use the first button in the sidebarEntries list
-			if (open == null && !sidebarEntries.isEmpty()) {
-				open = sidebarEntries.get(0); // Get the first element
+			if (open == null)
+			{
+				open = sidebarEntries.first();
 			}
 
-			// Open the selected panel
 			openPanel(open, true);
-		} else {
-			sidebar.setSelectedIndex(-1); // Deselect if sidebar is visible
+		}
+		else
+		{
+			sidebar.setSelectedIndex(-1);
 		}
 	}
-
 
 	private void pushHistory()
 	{
